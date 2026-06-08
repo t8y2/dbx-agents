@@ -146,6 +146,19 @@ public final class JsonRpcServer {
         if (AgentProtocol.METHOD_CLOSE_QUERY_SESSION.equals(method)) {
             return agent.closeQuerySession(params.get("sessionId").getAsString());
         }
+        if (AgentProtocol.METHOD_GET_EXPLAIN_INFO.equals(method)) {
+            String plan = agent.getExplainInfo(
+                params.get("sql").getAsString(),
+                stringOrNull(params, "database"),
+                stringOrNull(params, "schema"),
+                intOrDefault(params, "timeoutSecs", -1),
+                stringOrNull(params, "mode")
+            );
+            java.util.HashMap<String, Object> result = new java.util.HashMap<>();
+            result.put("plan", plan);
+            result.put("has_actual_stats", "autotrace".equals(stringOrNull(params, "mode")));
+            return result;
+        }
         if (AgentProtocol.METHOD_EXECUTE_TRANSACTION.equals(method)) {
             Type statementsType = new TypeToken<List<String>>() {}.getType();
             List<String> statements = gson.fromJson(params.get("statements"), statementsType);

@@ -1,6 +1,9 @@
 dependencies {
+    // Local override: place a newer DmJdbcDriver*.jar in libs/ for versions
+    // not yet published to Maven Central (the fileTree takes priority over Maven).
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'com.dameng:DmJdbcDriver18:8.1.3.140'
+    // DmJdbcDriver8 supports JDK 8+ (compatible with JRE 21 used by DAMENG agent).
+    implementation 'com.dameng:DmJdbcDriver8:8.1.5.45'
 }
 
 tasks.named('shadowJar') {

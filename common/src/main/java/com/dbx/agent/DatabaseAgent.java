@@ -87,6 +87,16 @@ public interface DatabaseAgent {
         return JdbcExecutor.INSTANCE.closeQuerySession(sessionId);
     }
 
+    /**
+     * Get DM execution plan. Supports two modes:
+     *   mode="explain" (default) — direct plan, no execution
+     *   mode="autotrace"         — enable MONITOR_SQL_EXEC, execute SQL, then get plan with actual stats
+     * @return plan text
+     */
+    default String getExplainInfo(String sql, String database, String schema, int timeoutSecs, String mode) {
+        throw new UnsupportedOperationException("getExplainInfo is not supported by this agent");
+    }
+
     void disconnect();
 
     Connection getConnection();

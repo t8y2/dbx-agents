@@ -24,7 +24,9 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLXML;
+import java.sql.Statement;
 import java.sql.Types;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -421,14 +423,23 @@ public final class DamengAgent extends BaseDatabaseAgent {
     }
 
     private static Object normalizeResultValue(Object value) {
-        return switch (value) {
-            case null -> null;
-            case Clob clob -> unchecked(() -> clob.getSubString(1, Math.toIntExact(clob.length())));
-            case Blob blob -> unchecked(() -> bytesToHex(blob.getBytes(1, Math.toIntExact(blob.length()))));
-            case SQLXML sqlxml -> unchecked(sqlxml::getString);
-            case byte[] bytes -> bytesToHex(bytes);
-            default -> value instanceof Number || value instanceof Boolean ? value : value.toString();
-        };
+        if (value == null) return null;
+        if (value instanceof Clob) {
+            Clob clob = (Clob) value;
+            return unchecked(() -> clob.getSubString(1, Math.toIntExact(clob.length())));
+        }
+        if (value instanceof Blob) {
+            Blob blob = (Blob) value;
+            return unchecked(() -> bytesToHex(blob.getBytes(1, Math.toIntExact(blob.length()))));
+        }
+        if (value instanceof SQLXML) {
+            SQLXML sqlxml = (SQLXML) value;
+            return unchecked(sqlxml::getString);
+        }
+        if (value instanceof byte[]) {
+            return bytesToHex((byte[]) value);
+        }
+        return value instanceof Number || value instanceof Boolean ? value : value.toString();
     }
 
     private static String sqlXmlToString(SQLXML value) {
@@ -511,6 +522,68 @@ public final class DamengAgent extends BaseDatabaseAgent {
 
     private static String coalesce(String value) {
         return value == null ? "" : value;
+    }
+
+    @Override
+    public String getExplainInfo(String sql, String database, String schema, int timeoutSecs, String mode) {
+        return unchecked(() -> {
+            Connection conn = requireConnected();
+            boolean autotrace = "autotrace".equalsIgnoreCase(mode);
+            String planText = null;
+
+            if (autotrace) {
+                boolean monitorEnabled = false;
+                try (Statement s = conn.createStatement()) {
+                    s.execute("SF_SET_SESSION_PARA_VALUE('MONITOR_SQL_EXEC', 1)");
+                    monitorEnabled = true;
+                } catch (Exception ignored) {}
+
+                try (Statement stmt = conn.createStatement()) {
+                    if (timeoutSecs >= 0) {
+                        try { stmt.setQueryTimeout(timeoutSecs); } catch (Exception ignored) {}
+                    }
+                    boolean hasResultSet = stmt.execute(sql);
+                    if (hasResultSet) {
+                        try (ResultSet rs = stmt.getResultSet()) {
+                            while (rs.next()) { /* consume all rows */ }
+                        }
+                    }
+                    try {
+                        Class<?> dmConnClass = Class.forName("dm.jdbc.driver.DmdbConnection");
+                        if (dmConnClass.isInstance(conn)) {
+                            Method m = dmConnClass.getMethod("getExplainInfo", Statement.class);
+                            planText = (String) m.invoke(dmConnClass.cast(conn), stmt);
+                        }
+                    } catch (Exception ignored) {}
+                } finally {
+                    if (monitorEnabled) {
+                        try (Statement s = conn.createStatement()) {
+                            s.execute("SF_SET_SESSION_PARA_VALUE('MONITOR_SQL_EXEC', 0)");
+                        } catch (Exception ignored) {}
+                    }
+                }
+            } else {
+                try {
+                    Class<?> dmConnClass = Class.forName("dm.jdbc.driver.DmdbConnection");
+                    if (dmConnClass.isInstance(conn)) {
+                        Method m = dmConnClass.getMethod("getExplainInfo", String.class);
+                        planText = (String) m.invoke(dmConnClass.cast(conn), sql);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (planText == null || planText.trim().isEmpty()) {
+                try (Statement explainStmt = conn.createStatement();
+                     ResultSet rs = explainStmt.executeQuery("EXPLAIN " + sql)) {
+                    StringBuilder sb = new StringBuilder();
+                    while (rs.next()) {
+                        sb.append(rs.getString(1)).append("\n");
+                    }
+                    planText = sb.toString().trim();
+                } catch (Exception ignored) {}
+            }
+            return planText != null ? planText : "";
+        });
     }
 
     public static void main(String[] args) {

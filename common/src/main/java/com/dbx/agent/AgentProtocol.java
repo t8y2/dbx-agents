@@ -24,6 +24,7 @@ public final class AgentProtocol {
     public static final String METHOD_EXECUTE_QUERY_PAGE = "execute_query_page";
     public static final String METHOD_FETCH_QUERY_PAGE = "fetch_query_page";
     public static final String METHOD_CLOSE_QUERY_SESSION = "close_query_session";
+    public static final String METHOD_GET_EXPLAIN_INFO = "get_explain_info";
     public static final String METHOD_EXECUTE_TRANSACTION = "execute_transaction";
     public static final String METHOD_DISCONNECT = "disconnect";
     public static final String METHOD_SHUTDOWN = "shutdown";
@@ -77,6 +78,7 @@ public final class AgentProtocol {
         METHOD_EXECUTE_QUERY_PAGE,
         METHOD_FETCH_QUERY_PAGE,
         METHOD_CLOSE_QUERY_SESSION,
+        METHOD_GET_EXPLAIN_INFO,
         METHOD_EXECUTE_TRANSACTION,
         METHOD_DISCONNECT,
         METHOD_SHUTDOWN
