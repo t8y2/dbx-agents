@@ -45,6 +45,24 @@ class TDengineAgentMetadataTest {
     }
 
     @Test
+    void supportsRestTransportViaCompatibilityUrlParam() {
+        String url = TDengineJdbcUrl.from(
+            new ConnectParams("127.0.0.1", 0, "testdb", "", "", "dbx.transport=rest&charset=UTF-8", "", false)
+        );
+
+        Assertions.assertEquals("jdbc:TAOS-RS://127.0.0.1:6041/testdb?charset=UTF-8", url);
+    }
+
+    @Test
+    void stripsTransportControlParamFromJdbcQuery() {
+        String url = TDengineJdbcUrl.from(
+            new ConnectParams("127.0.0.1", 6041, "", "", "", "transport=ws&timezone=UTC", "", false)
+        );
+
+        Assertions.assertEquals("jdbc:TAOS-WS://127.0.0.1:6041/?timezone=UTC", url);
+    }
+
+    @Test
     void usesTdengineMetadataStatements() {
         TDengineAgent agent = new TDengineAgent();
         TestSupport.setPrivateConnection(agent, JdbcMetadataSqlFake.connection());
@@ -91,5 +109,14 @@ class TDengineAgentMetadataTest {
             "2026-05-16 09:35:58.123",
             TDengineAgent.decodeTdengineValue(Timestamp.valueOf("2026-05-16 09:35:58.123"))
         );
+    }
+
+    @Test
+    void unknownTransportValueDefaultsToWebsocketAndKeepsOtherParams() {
+        String url = TDengineJdbcUrl.from(
+            new ConnectParams("127.0.0.1", 6041, "", "", "", "transport=foo&timezone=UTC", "", false)
+        );
+
+        Assertions.assertEquals("jdbc:TAOS-WS://127.0.0.1:6041/?timezone=UTC", url);
     }
 }

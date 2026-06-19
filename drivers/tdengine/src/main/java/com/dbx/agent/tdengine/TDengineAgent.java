@@ -30,6 +30,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,16 +61,14 @@ public final class TDengineAgent extends BaseDatabaseAgent {
     @Override
     public void connect(ConnectParams params) {
         uncheckedVoid(() -> {
-            Class.forName("com.taosdata.jdbc.ws.WebSocketDriver");
-            connection = DriverManager.getConnection(TDengineJdbcUrl.from(params), params.getUsername(), params.getPassword());
+            connection = TDengineConnectionFactory.open(params);
         });
     }
 
     @Override
     public boolean testConnection(ConnectParams params) {
         return unchecked(() -> {
-            Class.forName("com.taosdata.jdbc.ws.WebSocketDriver");
-            try (Connection conn = DriverManager.getConnection(TDengineJdbcUrl.from(params), params.getUsername(), params.getPassword())) {
+            try (Connection conn = TDengineConnectionFactory.open(params)) {
                 return conn.isValid(5);
             }
         });
@@ -350,19 +356,218 @@ public final class TDengineAgent extends BaseDatabaseAgent {
 }
 
 final class TDengineJdbcUrl {
+    enum TransportPreference {
+        AUTO,
+        WEBSOCKET,
+        REST
+    }
+
+    private static final String PARAM_TRANSPORT = "transport";
+    private static final String PARAM_DBX_TRANSPORT = "dbx.transport";
+
     private TDengineJdbcUrl() {
     }
 
     static String from(ConnectParams params) {
+        TransportPreference preference = transportPreference(params.getUrl_params());
+        if (preference == TransportPreference.REST) {
+            return from(params, TDengineTransport.REST);
+        }
         String host = params.getHost().isBlank() ? "localhost" : params.getHost();
         int port = params.getPort() > 0 ? params.getPort() : 6041;
         String database = params.getDatabase().trim();
         String path = database.isBlank() ? "/" : "/" + database;
-        String query = params.getUrl_params().trim();
+        String query = normalizeQueryString(params.getUrl_params());
+        String suffix = query.isBlank() ? "" : "?" + query;
+        return "jdbc:TAOS-WS://" + host + ":" + port + path + suffix;
+    }
+
+    static String from(ConnectParams params, TDengineTransport transport) {
+        String host = params.getHost().isBlank() ? "localhost" : params.getHost();
+        int port = params.getPort() > 0 ? params.getPort() : 6041;
+        String database = params.getDatabase().trim();
+        String path = database.isBlank() ? "/" : "/" + database;
+        String query = normalizeQueryString(params.getUrl_params());
+        String suffix = query.isBlank() ? "" : "?" + query;
+        return transport.urlPrefix() + host + ":" + port + path + suffix;
+    }
+
+    static TransportPreference transportPreference(String rawQuery) {
+        String query = rawQuery == null ? "" : rawQuery.trim();
         if (query.startsWith("?")) {
             query = query.substring(1);
         }
-        String suffix = query.isBlank() ? "" : "?" + query;
-        return "jdbc:TAOS-WS://" + host + ":" + port + path + suffix;
+        if (query.isBlank()) {
+            return TransportPreference.AUTO;
+        }
+        String[] parts = query.split("&");
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            int index = part.indexOf('=');
+            String key = index < 0 ? part.trim() : part.substring(0, index).trim();
+            if (!PARAM_TRANSPORT.equalsIgnoreCase(key) && !PARAM_DBX_TRANSPORT.equalsIgnoreCase(key)) {
+                continue;
+            }
+            String value = index < 0 ? "" : part.substring(index + 1).trim();
+            if ("rest".equalsIgnoreCase(value) || "rs".equalsIgnoreCase(value)) {
+                return TransportPreference.REST;
+            }
+            if ("ws".equalsIgnoreCase(value) || "websocket".equalsIgnoreCase(value)) {
+                return TransportPreference.WEBSOCKET;
+            }
+        }
+        return TransportPreference.AUTO;
+    }
+
+    private static String normalizeQueryString(String rawQuery) {
+        String query = rawQuery == null ? "" : rawQuery.trim();
+        if (query.startsWith("?")) {
+            query = query.substring(1);
+        }
+        if (query.isBlank()) {
+            return "";
+        }
+        String[] parts = query.split("&");
+        List<String> kept = new ArrayList<>();
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            int index = part.indexOf('=');
+            String key = index < 0 ? part.trim() : part.substring(0, index).trim();
+            if (PARAM_TRANSPORT.equalsIgnoreCase(key) || PARAM_DBX_TRANSPORT.equalsIgnoreCase(key)) {
+                continue;
+            }
+            kept.add(part);
+        }
+        return String.join("&", kept);
+    }
+}
+
+enum TDengineTransport {
+    WEBSOCKET("jdbc:TAOS-WS://", "com.taosdata.jdbc.ws.WebSocketDriver"),
+    REST("jdbc:TAOS-RS://", "com.taosdata.jdbc.rs.RestfulDriver");
+
+    private final String urlPrefix;
+    private final String driverClass;
+
+    TDengineTransport(String urlPrefix, String driverClass) {
+        this.urlPrefix = urlPrefix;
+        this.driverClass = driverClass;
+    }
+
+    String urlPrefix() {
+        return urlPrefix;
+    }
+
+    String driverClass() {
+        return driverClass;
+    }
+}
+
+final class TDengineConnectionFactory {
+    private static final int AUTO_TRANSPORT_ATTEMPT_TIMEOUT_SECONDS = 8;
+
+    private TDengineConnectionFactory() {
+    }
+
+    static Connection open(ConnectParams params) throws Exception {
+        String explicitConnectionString = params.getConnection_string() == null ? "" : params.getConnection_string().trim();
+        if (!explicitConnectionString.isBlank()) {
+            Class.forName(driverClassFromConnectionString(explicitConnectionString));
+            return DriverManager.getConnection(explicitConnectionString, params.getUsername(), params.getPassword());
+        }
+
+        TDengineJdbcUrl.TransportPreference preference = TDengineJdbcUrl.transportPreference(params.getUrl_params());
+        TDengineTransport[] candidates = transportsFor(preference);
+        Exception firstError = null;
+        for (TDengineTransport transport : candidates) {
+            try {
+                Connection connection = preference == TDengineJdbcUrl.TransportPreference.AUTO
+                    ? openWithAttemptTimeout(params, transport)
+                    : openDirect(params, transport);
+                return connection;
+            } catch (Exception e) {
+                if (firstError == null) {
+                    firstError = e;
+                } else {
+                    firstError.addSuppressed(e);
+                }
+            }
+        }
+        if (firstError != null) {
+            throw new RuntimeException("Failed to connect TDengine using transports: " + candidateNames(candidates), firstError);
+        }
+        throw new IllegalStateException("No TDengine transport available.");
+    }
+
+    private static Connection openDirect(ConnectParams params, TDengineTransport transport) throws Exception {
+        Class.forName(transport.driverClass());
+        String url = TDengineJdbcUrl.from(params, transport);
+        return DriverManager.getConnection(url, params.getUsername(), params.getPassword());
+    }
+
+    private static Connection openWithAttemptTimeout(ConnectParams params, TDengineTransport transport) throws Exception {
+        String threadName = "tdengine-connect-" + transport.name().toLowerCase(Locale.ROOT);
+        ThreadFactory factory = runnable -> {
+            Thread thread = new Thread(runnable, threadName);
+            thread.setDaemon(true);
+            return thread;
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor(factory);
+        try {
+            Future<Connection> future = executor.submit(new Callable<Connection>() {
+                @Override
+                public Connection call() throws Exception {
+                    return openDirect(params, transport);
+                }
+            });
+            return future.get(AUTO_TRANSPORT_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new RuntimeException(
+                "TDengine " + transport.name().toLowerCase(Locale.ROOT)
+                    + " transport connect timed out after " + AUTO_TRANSPORT_ATTEMPT_TIMEOUT_SECONDS + "s",
+                e
+            );
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while connecting TDengine via " + transport.name().toLowerCase(Locale.ROOT), e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            throw new RuntimeException(cause);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static TDengineTransport[] transportsFor(TDengineJdbcUrl.TransportPreference preference) {
+        return switch (preference) {
+            case REST -> new TDengineTransport[] {TDengineTransport.REST};
+            case WEBSOCKET -> new TDengineTransport[] {TDengineTransport.WEBSOCKET};
+            case AUTO -> new TDengineTransport[] {TDengineTransport.WEBSOCKET, TDengineTransport.REST};
+        };
+    }
+
+    private static String candidateNames(TDengineTransport[] candidates) {
+        List<String> names = new ArrayList<>();
+        for (TDengineTransport candidate : candidates) {
+            names.add(candidate.name().toLowerCase(Locale.ROOT));
+        }
+        return String.join(" -> ", names);
+    }
+
+    private static String driverClassFromConnectionString(String connectionString) {
+        if (connectionString.regionMatches(true, 0, TDengineTransport.REST.urlPrefix(), 0, TDengineTransport.REST.urlPrefix().length())) {
+            return TDengineTransport.REST.driverClass();
+        }
+        if (connectionString.regionMatches(true, 0, TDengineTransport.WEBSOCKET.urlPrefix(), 0, TDengineTransport.WEBSOCKET.urlPrefix().length())) {
+            return TDengineTransport.WEBSOCKET.driverClass();
+        }
+        return TDengineTransport.WEBSOCKET.driverClass();
     }
 }
