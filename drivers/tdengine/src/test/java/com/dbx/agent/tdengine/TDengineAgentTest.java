@@ -119,4 +119,22 @@ class TDengineAgentMetadataTest {
 
         Assertions.assertEquals("jdbc:TAOS-WS://127.0.0.1:6041/?timezone=UTC", url);
     }
+
+    @Test
+    void sanitizeConnectionStringStripsTransportControlParams() {
+        String sanitized = TDengineJdbcUrl.sanitizeConnectionString(
+            "jdbc:TAOS-WS://127.0.0.1:6041/db?dbx.transport=rest&charset=UTF-8&transport=ws"
+        );
+
+        Assertions.assertEquals("jdbc:TAOS-WS://127.0.0.1:6041/db?charset=UTF-8", sanitized);
+    }
+
+    @Test
+    void sanitizeConnectionStringKeepsFragmentAndNonControlParams() {
+        String sanitized = TDengineJdbcUrl.sanitizeConnectionString(
+            "jdbc:TAOS-RS://127.0.0.1:6041/db?timezone=UTC&dbx.transport=rest#anchor"
+        );
+
+        Assertions.assertEquals("jdbc:TAOS-RS://127.0.0.1:6041/db?timezone=UTC#anchor", sanitized);
+    }
 }

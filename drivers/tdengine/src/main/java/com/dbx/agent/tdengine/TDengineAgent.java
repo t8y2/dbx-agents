@@ -392,6 +392,29 @@ final class TDengineJdbcUrl {
         return transport.urlPrefix() + host + ":" + port + path + suffix;
     }
 
+    static String sanitizeConnectionString(String connectionString) {
+        if (connectionString == null || connectionString.isBlank()) {
+            return "";
+        }
+        int queryIndex = connectionString.indexOf('?');
+        if (queryIndex < 0) {
+            return connectionString;
+        }
+        String base = connectionString.substring(0, queryIndex);
+        String rawQuery = connectionString.substring(queryIndex + 1);
+        int fragmentIndex = rawQuery.indexOf('#');
+        String fragment = "";
+        if (fragmentIndex >= 0) {
+            fragment = rawQuery.substring(fragmentIndex);
+            rawQuery = rawQuery.substring(0, fragmentIndex);
+        }
+        String query = normalizeQueryString(rawQuery);
+        if (query.isBlank()) {
+            return base + fragment;
+        }
+        return base + "?" + query + fragment;
+    }
+
     static TransportPreference transportPreference(String rawQuery) {
         String query = rawQuery == null ? "" : rawQuery.trim();
         if (query.startsWith("?")) {
@@ -476,8 +499,9 @@ final class TDengineConnectionFactory {
     static Connection open(ConnectParams params) throws Exception {
         String explicitConnectionString = params.getConnection_string() == null ? "" : params.getConnection_string().trim();
         if (!explicitConnectionString.isBlank()) {
-            Class.forName(driverClassFromConnectionString(explicitConnectionString));
-            return DriverManager.getConnection(explicitConnectionString, params.getUsername(), params.getPassword());
+            String sanitizedConnectionString = TDengineJdbcUrl.sanitizeConnectionString(explicitConnectionString);
+            Class.forName(driverClassFromConnectionString(sanitizedConnectionString));
+            return DriverManager.getConnection(sanitizedConnectionString, params.getUsername(), params.getPassword());
         }
 
         TDengineJdbcUrl.TransportPreference preference = TDengineJdbcUrl.transportPreference(params.getUrl_params());
