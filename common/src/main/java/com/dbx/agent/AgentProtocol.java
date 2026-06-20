@@ -60,6 +60,17 @@ public final class AgentProtocol {
         CAPABILITY_DDL
     ));
 
+    public static final List<String> ALL_CAPABILITIES = Collections.unmodifiableList(Arrays.asList(
+        CAPABILITY_CONNECT,
+        CAPABILITY_TEST_CONNECTION,
+        CAPABILITY_METADATA,
+        CAPABILITY_QUERY,
+        CAPABILITY_PAGED_QUERY,
+        CAPABILITY_TRANSACTION,
+        CAPABILITY_DDL,
+        CAPABILITY_KV
+    ));
+
     public static final List<String> COMMON_METHODS = Collections.unmodifiableList(Arrays.asList(
         METHOD_HANDSHAKE,
         METHOD_CONNECT,

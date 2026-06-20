@@ -43,9 +43,12 @@ class CommonJavaCompatibilityTest {
             Arrays.asList("protocolVersion", "agentProtocolVersion", "capabilities"),
             strings(contract.getAsJsonArray("handshakeResponseFields"))
         );
+        assertEquals(AgentProtocol.ALL_CAPABILITIES, strings(contract.getAsJsonArray("allCapabilities")));
         assertEquals(AgentProtocol.CAPABILITIES, strings(contract.getAsJsonArray("capabilities")));
+        assertEquals(AgentProtocol.CAPABILITIES, strings(contract.getAsJsonArray("defaultSqlCapabilities")));
         assertEquals(AgentProtocol.COMMON_METHODS, strings(contract.getAsJsonArray("commonMethods")));
         assertEquals(AgentProtocol.MONGO_LEGACY_METHODS, strings(contract.getAsJsonArray("mongoLegacyMethods")));
+        assertEquals(AgentProtocol.KV_METHODS, strings(contract.getAsJsonArray("kvMethods")));
     }
 
     @Test

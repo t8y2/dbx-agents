@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,15 @@ func TestHandshakeResponse(t *testing.T) {
 	}
 	if result.ProtocolVersion != 1 || result.AgentProtocolVersion != 1 {
 		t.Fatalf("unexpected protocol versions: %+v", result)
+	}
+	contract := protocolContract(t)
+	if result.ProtocolVersion != contract.ProtocolVersion || result.AgentProtocolVersion != contract.ProtocolVersion {
+		t.Fatalf("handshake protocol versions do not match contract: result=%+v contract=%+v", result, contract)
+	}
+	for _, capability := range result.Capabilities {
+		if !contains(contract.AllCapabilities, capability) {
+			t.Fatalf("handshake returned capability %q outside protocol contract %v", capability, contract.AllCapabilities)
+		}
 	}
 	if !contains(result.Capabilities, "query") || !contains(result.Capabilities, "metadata") {
 		t.Fatalf("expected query and metadata capabilities, got %v", result.Capabilities)
@@ -86,6 +96,25 @@ func TestBuildDSNUsesConnectionStringWhenProvided(t *testing.T) {
 	if dsn != "IP=db.example.com;DB=SYSTEM;User=SYSDBA;PWD=secret;Port=5138" {
 		t.Fatalf("unexpected dsn: %s", dsn)
 	}
+}
+
+func protocolContract(t *testing.T) struct {
+	ProtocolVersion int      `json:"protocolVersion"`
+	AllCapabilities []string `json:"allCapabilities"`
+} {
+	t.Helper()
+	data, err := os.ReadFile("../../common/src/main/resources/agent-protocol-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contract struct {
+		ProtocolVersion int      `json:"protocolVersion"`
+		AllCapabilities []string `json:"allCapabilities"`
+	}
+	if err := json.Unmarshal(data, &contract); err != nil {
+		t.Fatal(err)
+	}
+	return contract
 }
 
 func TestBuildDSNUsesConnectionFields(t *testing.T) {
