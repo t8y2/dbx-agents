@@ -80,6 +80,20 @@ final class ZooKeeperAgentTest {
     }
 
     @Test
+    void buildClientRejectsTlsOptionsUntilTlsIsSupported() {
+        JsonObject connection = JsonParser.parseString(
+            "{\"ssl\":true,\"ca_cert_path\":\"ca.pem\",\"client_cert_path\":\"client.pem\",\"client_key_path\":\"client.key\"}"
+        ).getAsJsonObject();
+
+        IllegalArgumentException error = Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () -> ZooKeeperAgent.buildClient(connection)
+        );
+
+        Assertions.assertEquals("ZooKeeper TLS is not supported", error.getMessage());
+    }
+
+    @Test
     void normalizePathStandardizesPublicPaths() {
         Assertions.assertEquals("/", ZooKeeperAgent.normalizePath(""));
         Assertions.assertEquals("/", ZooKeeperAgent.normalizePath("/"));
@@ -142,7 +156,11 @@ final class ZooKeeperAgentTest {
             Assertions.assertTrue(get.get("found").getAsBoolean());
             Assertions.assertEquals("utf8", get.getAsJsonObject("value").get("encoding").getAsString());
             Assertions.assertEquals("dbx", get.getAsJsonObject("value").get("data").getAsString());
-            Assertions.assertEquals(0, get.getAsJsonObject("metadata").get("numChildren").getAsInt());
+            JsonObject metadata = get.getAsJsonObject("metadata");
+            Assertions.assertEquals(0, metadata.get("numChildren").getAsInt());
+            Assertions.assertEquals(metadata.get("czxid").getAsLong(), metadata.get("createRevision").getAsLong());
+            Assertions.assertEquals(metadata.get("mzxid").getAsLong(), metadata.get("modRevision").getAsLong());
+            Assertions.assertEquals(metadata.get("dataLength").getAsInt(), metadata.get("valueSize").getAsInt());
         }
     }
 
@@ -255,7 +273,21 @@ final class ZooKeeperAgentTest {
     }
 
     @Test
-    void listPrefixListsDirectChildrenOfRoot() throws Exception {
+    void listPrefixListsDirectChildrenOfRootWhenRecursiveIsFalse() throws Exception {
+        try (TestingServer server = new TestingServer()) {
+            connect(server);
+            result(request(2, "kv_put", "{\"key\":\"/app/name\",\"value\":{\"encoding\":\"utf8\",\"data\":\"dbx\"}}"));
+            result(request(3, "kv_put", "{\"key\":\"/config\",\"value\":{\"encoding\":\"utf8\",\"data\":\"cfg\"}}"));
+
+            JsonObject list = result(request(5, "kv_list_prefix", "{\"prefix\":\"/\",\"recursive\":false}"));
+
+            Assertions.assertEquals(List.of("/app", "/config"), listedKeys(list));
+            Assertions.assertTrue(list.get("continuation").isJsonNull());
+        }
+    }
+
+    @Test
+    void listPrefixDefaultsToRecursiveForDbxKvBrowser() throws Exception {
         try (TestingServer server = new TestingServer()) {
             connect(server);
             result(request(2, "kv_put", "{\"key\":\"/app/name\",\"value\":{\"encoding\":\"utf8\",\"data\":\"dbx\"}}"));
@@ -263,7 +295,7 @@ final class ZooKeeperAgentTest {
 
             JsonObject list = result(request(5, "kv_list_prefix", "{\"prefix\":\"/\"}"));
 
-            Assertions.assertEquals(List.of("/app", "/config"), listedKeys(list));
+            Assertions.assertEquals(List.of("/app", "/app/name", "/config"), listedKeys(list));
             Assertions.assertTrue(list.get("continuation").isJsonNull());
         }
     }

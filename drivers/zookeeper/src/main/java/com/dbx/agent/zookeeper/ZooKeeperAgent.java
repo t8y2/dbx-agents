@@ -74,6 +74,10 @@ public final class ZooKeeperAgent {
     }
 
     static CuratorFramework buildClient(JsonObject connection) {
+        if (hasTlsOptions(connection)) {
+            throw new IllegalArgumentException("ZooKeeper TLS is not supported");
+        }
+
         int baseSleepTimeMs = intOrDefault(connection, "base_sleep_time_ms", DEFAULT_BASE_SLEEP_TIME_MS);
         int maxRetries = intOrDefault(connection, "max_retries", DEFAULT_MAX_RETRIES);
         CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
@@ -123,7 +127,7 @@ public final class ZooKeeperAgent {
     private static Object listPrefix(JsonObject params) throws Exception {
         CuratorFramework active = requireClient();
         String root = normalizePath(stringOrDefault(params, "prefix", "/"));
-        boolean recursive = boolOrDefault(params, "recursive", false);
+        boolean recursive = boolOrDefault(params, "recursive", true);
         int limit = Math.max(1, intOrDefault(params, "limit", DEFAULT_LIMIT));
         Cursor cursor = null;
         String continuation = stringOrNull(params, "continuation");
@@ -320,16 +324,22 @@ public final class ZooKeeperAgent {
 
     private static Map<String, Object> statMetadata(Stat stat) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("czxid", stat.getCzxid());
-        metadata.put("mzxid", stat.getMzxid());
+        long czxid = stat.getCzxid();
+        long mzxid = stat.getMzxid();
+        int dataLength = stat.getDataLength();
+        metadata.put("czxid", czxid);
+        metadata.put("mzxid", mzxid);
         metadata.put("ctime", stat.getCtime());
         metadata.put("mtime", stat.getMtime());
         metadata.put("version", stat.getVersion());
         metadata.put("cversion", stat.getCversion());
         metadata.put("aversion", stat.getAversion());
         metadata.put("ephemeralOwner", stat.getEphemeralOwner());
-        metadata.put("dataLength", stat.getDataLength());
+        metadata.put("dataLength", dataLength);
         metadata.put("numChildren", stat.getNumChildren());
+        metadata.put("createRevision", czxid);
+        metadata.put("modRevision", mzxid);
+        metadata.put("valueSize", dataLength);
         return metadata;
     }
 
@@ -438,6 +448,17 @@ public final class ZooKeeperAgent {
 
     private static boolean shouldHideFromRootListing(String root, String path) {
         return "/".equals(root) && ("/zookeeper".equals(path) || path.startsWith("/zookeeper/"));
+    }
+
+    private static boolean hasTlsOptions(JsonObject connection) {
+        return boolOrDefault(connection, "ssl", false)
+            || firstNonBlank(
+                stringOrNull(connection, "ca_cert_path"),
+                stringOrNull(connection, "client_cert_path"),
+                stringOrNull(connection, "client_key_path"),
+                stringOrNull(connection, "cert_path"),
+                stringOrNull(connection, "key_path")
+            ) != null;
     }
 
     private static String trimSlashes(String value) {
