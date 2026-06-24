@@ -358,9 +358,11 @@ public final class ZooKeeperAgent {
         Map<String, Object> metadata = new LinkedHashMap<>();
         long czxid = stat.getCzxid();
         long mzxid = stat.getMzxid();
+        long pzxid = stat.getPzxid();
         int dataLength = stat.getDataLength();
         metadata.put("czxid", czxid);
         metadata.put("mzxid", mzxid);
+        metadata.put("pzxid", pzxid);
         metadata.put("ctime", stat.getCtime());
         metadata.put("mtime", stat.getMtime());
         metadata.put("version", stat.getVersion());
